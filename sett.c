@@ -132,3 +132,9 @@ char *sett_get_string(Sett *s, const char *key, const char *def) {
     }
     return strdup(val);
 }
+
+// Get the raw JSON value of a key (owned by the Sett handle; do not free)
+JsonValue *sett_get_json(Sett *s, const char *key) {
+    if (!s || !s->root || !key) return NULL;
+    return json_get(s->root, key);
+}

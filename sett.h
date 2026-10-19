@@ -21,6 +21,7 @@ extern "C" {
 #endif
 
 #include <stdbool.h>
+#include "json.h"
 
 // Maximum allowed config file size in bytes
 #define SETT_MAX_FILE (1024 * 1024)
@@ -57,6 +58,14 @@ bool sett_get_bool(Sett *s, const char *key, bool def);
  * @param def Default value if missing, empty, or of the wrong type.
  * @return A heap-allocated copy of the value. */
 char *sett_get_string(Sett *s, const char *key, const char *def);
+
+/* Get the raw JSON value of a config key (nested objects and arrays).
+ * The node belongs to the Sett handle: do NOT free it, and it is only valid
+ * while the Sett handle is alive.
+ * @param s Settings handle.
+ * @param key Config key name.
+ * @return The value node, or NULL if the key is missing. */
+JsonValue *sett_get_json(Sett *s, const char *key);
 
 #ifdef __cplusplus
 }

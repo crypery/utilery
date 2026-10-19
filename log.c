@@ -9,7 +9,8 @@
  *
  * Timestamped log output to console, file, both, or none, with configurable
  * severity levels (DEBUG, INFO, WARN, ERROR). Uses thread-safe Win32
- * GetLocalTime instead of locale-dependent CRT localtime/strftime.
+ * GetLocalTime instead of locale-dependent CRT localtime/strftime. Thread-safe:
+ * every write and callback invocation is serialized by an internal lock.
  *
  * Example:
  *   log_init(LOG_OUTPUT_FILE, LOG_LEVEL_INFO, "server.log");
@@ -51,9 +52,34 @@ static char g_log_path[512] = DEFAULT_LOG_FILE;
 static int g_log_open = 0;
 static log_cb_t g_log_cb = NULL;
 
-// Install a callback that receives each formatted log line
+// Module-wide lock: log lines are produced by several worker threads, and the
+// callback (log saving/mirroring) must not run concurrently with itself. Every
+// log_vmsg()/log_set_callback()/log_init()/log_close() critical section is
+// serialized through this lock.
+#ifdef _WIN32
+#include <windows.h>
+static CRITICAL_SECTION g_log_lock;
+static int g_log_lock_init = 0;
+static void log_lock(void) {
+    if (!g_log_lock_init) { InitializeCriticalSection(&g_log_lock); g_log_lock_init = 1; }
+    EnterCriticalSection(&g_log_lock);
+}
+static void log_unlock(void) {
+    LeaveCriticalSection(&g_log_lock);
+}
+#else
+#include <pthread.h>
+static pthread_mutex_t g_log_lock = PTHREAD_MUTEX_INITIALIZER;
+static void log_lock(void) { pthread_mutex_lock(&g_log_lock); }
+static void log_unlock(void) { pthread_mutex_unlock(&g_log_lock); }
+#endif
+
+// Install a callback that receives each formatted log line (log saving /
+// mirroring). The assignment is protected by the module lock.
 void log_set_callback(log_cb_t cb) {
+    log_lock();
     g_log_cb = cb;
+    log_unlock();
 }
 
 // Format the current local date/time into buf (thread-safe)
@@ -83,8 +109,9 @@ static const char *log_level_str(LogLevel level) {
 
 // Initialize logging with output mode, level, and file
 void log_init(int output, int level, const char *filename) {
-    if (g_log_open) log_close();
+    if (g_log_open) log_close(); /* log_close() takes the lock itself */
 
+    log_lock();
     g_log_output = LOG_OUTPUT_NONE;
     if (output == LOG_OUTPUT_BOTH) g_log_output = LOG_OUTPUT_BOTH;
     else if (output == LOG_OUTPUT_CONSOLE) g_log_output = LOG_OUTPUT_CONSOLE;
@@ -111,10 +138,12 @@ void log_init(int output, int level, const char *filename) {
         }
     }
     g_log_open = 1;
+    log_unlock();
 }
 
 // Close log file and flush
 void log_close(void) {
+    log_lock();
     if (g_log_file) {
         char ts[64];
         log_timestamp(ts, sizeof(ts));
@@ -124,6 +153,7 @@ void log_close(void) {
         g_log_file = NULL;
     }
     g_log_open = 0;
+    log_unlock();
 }
 
 // Write a log message at given level
@@ -143,21 +173,22 @@ void log_vmsg(LogLevel level, const char *fmt, va_list args) {
     snprintf(full_msg, sizeof(full_msg), "[%s] [%s] %s\n",
              ts, log_level_str(level), msg);
 
+    log_lock();
     if (g_log_cb) g_log_cb(full_msg);
 
-    if (g_log_output == LOG_OUTPUT_NONE) return;
-
-    if (g_log_output == LOG_OUTPUT_FILE || g_log_output == LOG_OUTPUT_BOTH) {
-        if (g_log_file) {
-            fprintf(g_log_file, "%s", full_msg);
-            fflush(g_log_file);
+    if (g_log_output != LOG_OUTPUT_NONE) {
+        if (g_log_output == LOG_OUTPUT_FILE || g_log_output == LOG_OUTPUT_BOTH) {
+            if (g_log_file) {
+                fprintf(g_log_file, "%s", full_msg);
+                fflush(g_log_file);
+            }
+        }
+        if (g_log_output == LOG_OUTPUT_CONSOLE || g_log_output == LOG_OUTPUT_BOTH) {
+            fprintf(stderr, "%s", full_msg);
+            fflush(stderr);
         }
     }
-
-    if (g_log_output == LOG_OUTPUT_CONSOLE || g_log_output == LOG_OUTPUT_BOTH) {
-        fprintf(stderr, "%s", full_msg);
-        fflush(stderr);
-    }
+    log_unlock();
 }
 
 // Write a formatted log message at given level

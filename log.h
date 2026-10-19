@@ -10,7 +10,9 @@
  * Timestamped logging to console, file, both, or none with configurable
  * severity levels. Configure with log_init(), write messages through the
  * LOG_* macros or log_msg(), and shut down with log_close(). Setting
- * LOG_OUTPUT_NONE disables all output.
+ * LOG_OUTPUT_NONE disables all output. Thread-safe: every write and callback
+ * invocation is serialized by an internal lock, so it is safe to log from
+ * several worker threads.
  */
 
 #ifndef LOG_H
@@ -52,11 +54,14 @@ void log_init(int output, int level, const char *filename);
 // Close logging and flush any pending output.
 void log_close(void);
 
-// Callback invoked with every formatted log line (e.g. WebSocket broadcast)
+// Callback invoked with every formatted log line (log saving / mirroring,
+// e.g. WebSocket broadcast). Called while the log module lock is held.
 typedef void (*log_cb_t)(const char *msg);
 
-/* Install a callback that receives each formatted log line.
- * @param cb Callback, or NULL to remove it. */
+/* Install a callback that receives each formatted log line (used to save or
+ * mirror the log). The assignment and every callback invocation are protected
+ * by the log module lock, so the module stays thread-safe.
+ * @param cb Callback to install, or NULL to remove it. */
 void log_set_callback(log_cb_t cb);
 
 /* Write a formatted message at a given level.
