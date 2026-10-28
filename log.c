@@ -163,15 +163,27 @@ void log_vmsg(LogLevel level, const char *fmt, va_list args) {
     char ts[64];
     log_timestamp(ts, sizeof(ts));
 
-    char msg[1024];
-    vsnprintf(msg, sizeof(msg), fmt, args);
+    // size of the formatted message (no fixed-length buffer limit)
+    va_list args_copy;
+    va_copy(args_copy, args);
+    int msg_len = vsnprintf(NULL, 0, fmt, args_copy);
+    va_end(args_copy);
+    if (msg_len < 0) msg_len = 0;
+
+    char *msg = (char *) malloc((size_t)msg_len + 1);
+    if (!msg) return;
+    vsnprintf(msg, (size_t)msg_len + 1, fmt, args);
 
     size_t ml = strlen(msg);
     while (ml > 0 && (msg[ml-1] == '\n' || msg[ml-1] == '\r')) msg[--ml] = '\0';
 
-    char full_msg[1200];
-    snprintf(full_msg, sizeof(full_msg), "[%s] [%s] %s\n",
-             ts, log_level_str(level), msg);
+    // "[ts] [level] msg\n" + NUL
+    const char *level_str = log_level_str(level);
+    size_t full_len = strlen(ts) + strlen(level_str) + ml + 8;
+    char *full_msg = (char *) malloc(full_len);
+    if (!full_msg) { free(msg); return; }
+    snprintf(full_msg, full_len, "[%s] [%s] %s\n", ts, level_str, msg);
+    free(msg);
 
     log_lock();
     if (g_log_cb) g_log_cb(full_msg);
@@ -189,6 +201,7 @@ void log_vmsg(LogLevel level, const char *fmt, va_list args) {
         }
     }
     log_unlock();
+    free(full_msg);
 }
 
 // Write a formatted log message at given level
