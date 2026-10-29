@@ -20,6 +20,7 @@
  */
 #include "json.h"
 #include "ecma.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
@@ -351,3 +352,99 @@ const JsonValue *json_array_item(const JsonValue *v, int idx) {
 }
 // Get object member count
 int json_object_len(const JsonValue *o)     { return json_is_object(o) ? o->count : 0; }
+
+// ---------------------------------------------------------------------------
+// Serialization
+// ---------------------------------------------------------------------------
+
+// Growable NUL-terminated byte buffer used by the serializer
+typedef struct {
+    char *buf;
+    size_t len;
+    size_t cap;
+} SerBuf;
+
+// Append n bytes to the buffer; 1 on success
+static int serbuf_append(SerBuf *s, const char *data, size_t n) {
+    if (s->len + n + 1 > s->cap) {
+        size_t nc = s->cap ? s->cap : 64;
+        while (nc < s->len + n + 1) nc *= 2;
+        char *nb = (char *)realloc(s->buf, nc);
+        if (!nb) return 0;
+        s->buf = nb;
+        s->cap = nc;
+    }
+    memcpy(s->buf + s->len, data, n);
+    s->len += n;
+    s->buf[s->len] = '\0';
+    return 1;
+}
+
+// Append a single character to the buffer
+static int serbuf_char(SerBuf *s, char c) { return serbuf_append(s, &c, 1); }
+
+// Append a JSON-escaped string with surrounding quotes
+static int ser_string(SerBuf *s, const char *str) {
+    if (!serbuf_char(s, '"')) return 0;
+    for (const char *p = str ? str : ""; *p; p++) {
+        switch (*p) {
+            case '"':  if (!serbuf_append(s, "\\\"", 2)) return 0; break;
+            case '\\': if (!serbuf_append(s, "\\\\", 2)) return 0; break;
+            case '\n': if (!serbuf_append(s, "\\n", 2))  return 0; break;
+            case '\r': if (!serbuf_append(s, "\\r", 2))  return 0; break;
+            case '\t': if (!serbuf_append(s, "\\t", 2))  return 0; break;
+            default:   if (!serbuf_char(s, *p)) return 0; break;
+        }
+    }
+    return serbuf_char(s, '"');
+}
+
+// Recursively serialize a JsonValue into the buffer
+static int ser_value(SerBuf *s, const JsonValue *v) {
+    switch (v->type) {
+        case JSON_NULL:
+            return serbuf_append(s, "null", 4);
+        case JSON_BOOL:
+            return serbuf_append(s, v->bool_val ? "true" : "false", v->bool_val ? 4 : 5);
+        case JSON_NUMBER: {
+            char tmp[64];
+            int n = snprintf(tmp, sizeof(tmp), "%.17g", v->number_val);
+            return n > 0 ? serbuf_append(s, tmp, (size_t)n) : 0;
+        }
+        case JSON_STRING:
+            return ser_string(s, v->string_val);
+        case JSON_ARRAY: {
+            if (!serbuf_char(s, '[')) return 0;
+            for (int i = 0; i < v->count; i++) {
+                if (i && !serbuf_char(s, ',')) return 0;
+                if (!ser_value(s, v->children[i])) return 0;
+            }
+            return serbuf_char(s, ']');
+        }
+        case JSON_OBJECT: {
+            if (!serbuf_char(s, '{')) return 0;
+            for (int i = 0; i < v->count; i++) {
+                if (i && !serbuf_char(s, ',')) return 0;
+                if (!ser_string(s, v->keys[i])) return 0;
+                if (!serbuf_char(s, ':')) return 0;
+                if (!ser_value(s, v->children[i])) return 0;
+            }
+            return serbuf_char(s, '}');
+        }
+    }
+    return 0;
+}
+
+// Serialize a JsonValue tree into a compact JSON string
+char *json_value_to_str(const JsonValue *v) {
+    static const JsonValue null_val = { JSON_NULL, NULL, 0.0, 0, NULL, NULL, 0 };
+    SerBuf s;
+    s.buf = NULL;
+    s.len = 0;
+    s.cap = 0;
+    if (!ser_value(&s, v ? v : &null_val)) {
+        if (s.buf) free(s.buf);
+        return NULL;
+    }
+    return s.buf;
+}

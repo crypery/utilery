@@ -121,6 +121,12 @@ const JsonValue *json_array_item(const JsonValue *v, int idx);
  * @return Number of members, or 0 if not an object. */
 int json_object_len(const JsonValue *obj);
 
+/* Serialize a JsonValue tree back into a compact JSON string.
+ * @param v Value to serialize; NULL is serialized as null.
+ * @return malloc'd NUL-terminated JSON text, or NULL on allocation
+ *         failure. The caller must free() the result. */
+char *json_value_to_str(const JsonValue *v);
+
 #ifdef __cplusplus
 }
 #endif
